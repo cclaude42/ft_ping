@@ -1,125 +1,52 @@
+#include "ft_ping.h"
+
+// Info for signals
+struct info ginfo = {0};
 
 
-#include <stdlib.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
-#include <sys/time.h>
-#include <arpa/inet.h>
-#include <linux/if_packet.h>
-#include <signal.h>
-#include <errno.h>
-
-    //    #include <sys/socket.h>
-       
-    //    #include <net/ethernet.h> /* the L2 protocols */
-
-    //    #include <sys/types.h>
-    //    #include <sys/socket.h>
-#include <netdb.h>
-
-
-struct ppacket {
-    uint8_t     type;           // 8 for request, 0 for reply
-    uint8_t     code;           // Always 0 for requests and replies
-    uint16_t    checksum;       // Computed total for checks
-    uint16_t    identifier;     // Unique ID of current ping "loop" (starts at 1, increments)
-    uint16_t    sequence_number;// Unique ID of (starts at 1, increments)
-    char        time[8];
-    char        data[48];
-};
-
-
-#define UINT16_OVERFLOW 65536;
-
-#define FLAG_H 1
-#define FLAG_V 2
-
-#define TYPE 8
-#define CODE 0
-#define DATA "0123456789  [ft_ping] ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-
-#define IPH_LEN 20
-#define ICMPH_LEN 8
-#define DATA_LEN 56
-
-unsigned int transmitted = 0;
-unsigned int received = 0;
-char *gdest;
-struct timeval start;
-
-
-uint16_t compute_checksum (uint16_t *data, size_t size)
+// In event of Ctrl-C
+void interrupt (int sig)
 {
-    unsigned long sum = 0;
+    (void)sig;
+    unsigned int avg = ginfo.sum / ginfo.received;
+    unsigned int mdev = sqrt((ginfo.sqsum / ginfo.received) - (avg * avg));
 
-    for (int i = 0 ; i < size / 2 ; i++)
-        sum += data[i];
-
-    uint16_t chksm = sum + sum / UINT16_OVERFLOW;
-
-    return ~chksm;
+    printf("\n");
+    printf("--- %s ping statistics ---\n", ginfo.dest);
+    printf("%u packets transmitted, %u received, %u%% packet loss, time %ums\n",
+        ginfo.transmitted, ginfo.received, 100 - (100 * ginfo.received / ginfo.transmitted), timediff(ginfo.start, getnow()) / 1000);
+    printf("rtt min/avg/max/mdev = %u.%u/%u.%u/%u.%u/%u.%u ms\n",
+        ginfo.min / 1000, ginfo.min % 1000, avg / 1000, avg % 1000,
+        ginfo.max / 1000, ginfo.max % 1000, mdev / 1000, mdev % 1000);
+    exit(0);
 }
 
-unsigned int timediff (struct timeval old, struct timeval new)
-{
-    return (new.tv_sec - old.tv_sec) * 1000000 + new.tv_usec - old.tv_usec;
-}
-
-struct timeval getnow (void)
-{
-    struct timeval now;
-    gettimeofday(&now, 0);
-    return now;
-}
-
-struct timeval wait_sec (struct timeval last)
-{
-    while (timediff(last, getnow()) < 1000000)
-        ;
-
-    return getnow();
-}
-
-
-void settime (void *time)
-{
-    struct timeval ptr;
-
-    gettimeofday(&ptr, 0);
-
-    memcpy(time, &ptr.tv_sec, 4);
-}
-
-
-uint16_t byteswapped (uint16_t n)
-{
-    return (n << 8) + (n >> 8);
-}
-
-
+// Send echo request
 void send_request (int sockfd, struct sockaddr_in addr, unsigned int seq)
 {
+    // Init packet
     struct ppacket request = {0};
-    request.type = TYPE;
+
+    request.type = REQUEST_TYPE;
     request.code = CODE;
-    request.identifier = 0;
+    request.identifier = IDENTIFIER;
     request.sequence_number = byteswapped(seq);
     settime(&request.time);
-    memcpy(&request.data, DATA, sizeof(DATA));
+    memcopy(&request.data, DATA, sizeof(DATA));
     request.checksum = compute_checksum((uint16_t *)&request, sizeof(request));
 
+
+    // Send packet
     int ret = sendto(sockfd, &request, 64, 0, (struct sockaddr *)&addr, sizeof(addr));
 
     if (ret > 0)
-        transmitted++;
+        ginfo.transmitted++;
 }
 
-
-void watch_reply (int sockfd, struct timeval timesplit)
+// Read echo reply
+void recv_reply (int sockfd, struct timeval timesplit)
 {
+    // Init msghdr
     char buf[1000] = {0};
     char control[1000] = {0};
 
@@ -138,6 +65,7 @@ void watch_reply (int sockfd, struct timeval timesplit)
     mhdr.msg_controllen = sizeof(control);
 
 
+    // Read packet
     int ret = recvmsg(sockfd, &mhdr, 0);
 
     if (ret > 0) {
@@ -146,27 +74,20 @@ void watch_reply (int sockfd, struct timeval timesplit)
 
         uint16_t *seq = iov[0].iov_base + IPH_LEN + 6;
         uint8_t *ttl = iov[0].iov_base + 8;
-        unsigned int time = timediff(timesplit, getnow());
+        unsigned int triptime = timediff(timesplit, getnow());
 
-        printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%d.%d ms\n", ret - IPH_LEN, buf, byteswapped(*seq), *ttl, time / 1000, time % 100);
+        printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%d.%d ms\n", ret - IPH_LEN, buf, byteswapped(*seq), *ttl, triptime / 1000, triptime % 100);
         
-        received++;
+        ginfo.received++;
+        ginfo.min = min(ginfo.min, triptime);
+        ginfo.max = max(ginfo.max, triptime);
+        ginfo.sum += triptime;
+        ginfo.sqsum += triptime * triptime;
     }
 }
 
-
-void setflag (int *flags, char *arg)
-{
-    for (int i = 1 ; arg[i] ; i++) {
-        if (arg[i] == 'h')
-            *flags |= FLAG_H;
-        else if (arg[i] == 'v')
-            *flags |= FLAG_V;
-    }
-}
-
-
-struct sockaddr_in * check_addr (char *ip, void *addr)
+// Get address from ip
+void check_addr (char *ip, void *addr)
 {
     struct addrinfo *result;
 
@@ -177,7 +98,7 @@ struct sockaddr_in * check_addr (char *ip, void *addr)
     
     for (struct addrinfo *node = result ; node && node->ai_next ; node = node->ai_next) {
         if (((struct sockaddr_in *)node->ai_addr)->sin_addr.s_addr) {
-            memcpy(addr, node->ai_addr, sizeof(struct sockaddr_in));
+            memcopy(addr, node->ai_addr, sizeof(struct sockaddr_in));
             break ;
         }
     }
@@ -185,15 +106,31 @@ struct sockaddr_in * check_addr (char *ip, void *addr)
     freeaddrinfo(result);
 }
 
-void interrupt (int sig)
+// Ping
+void ping (char *dest)
 {
-    printf("\n");
-    printf("--- %s ping statistics ---\n", gdest);
-    printf("%u packets transmitted, %u received, %u%% packet loss, time %ums\n", transmitted, received, 100 - (100 * received / transmitted), timediff(start, getnow()) / 1000);
-    printf("RTT STUFF\n");
-    exit(0);
-}
+    struct sockaddr_in addr = {0};
+    check_addr(dest, &addr);
 
+    char buf[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf));
+
+    int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (sockfd < 0) {
+        printf("ft_ping: fatal error: Couldn't open socket\n");
+        exit(2);
+    }
+
+
+    printf("PING %s (%s) %d(%d) bytes of data.\n", dest, buf, DATA_LEN, IPH_LEN + ICMPH_LEN + DATA_LEN);
+
+    struct timeval timesplit = getnow();
+    for (int i = 0 ; i < 256 ; i++) {
+        send_request(sockfd, addr, i+1);
+        recv_reply(sockfd, timesplit);
+        timesplit = waitsec(timesplit);
+    }
+}
 
 
 int main (int ac, char **av)
@@ -217,31 +154,19 @@ int main (int ac, char **av)
         printf("  <destination>      dns name or ip address\n");
         printf("  -h                 print help and exit\n");
         printf("  -v                 verbose output\n");
+        exit(0);
     }
     else if (dest) {
-        start = getnow();
-        gdest = av[dest];
+        ginfo.dest = av[dest];
+        ginfo.start = getnow();
+        ginfo.min = 100000;
         signal(SIGINT, interrupt);
 
-        struct sockaddr_in addr = {0};
-        check_addr(av[dest], &addr);
-    
-        char buf[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf));
-
-        printf("PING %s (%s) %d(%d) bytes of data.\n", av[dest], buf, DATA_LEN, IPH_LEN + ICMPH_LEN + DATA_LEN);
-
-        int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-
-        struct timeval timesplit = getnow();
-        for (int i = 0 ; i < 256 ; i++) {
-            send_request(sockfd, addr, i+1);
-            watch_reply(sockfd, timesplit);
-            timesplit = wait_sec(timesplit);
-        }
+        ping(av[dest]);
     }
     else {
         printf("ft_ping: usage error: Destination address required\n");
+        exit(1);
     }
 
     return 0;
