@@ -8,7 +8,7 @@
 #include <sys/time.h>
 #include <arpa/inet.h>
 #include <linux/if_packet.h>
-
+#include <signal.h>
 #include <errno.h>
 
     //    #include <sys/socket.h>
@@ -44,6 +44,12 @@ struct ppacket {
 #define IPH_LEN 20
 #define ICMPH_LEN 8
 #define DATA_LEN 56
+
+unsigned int transmitted = 0;
+unsigned int received = 0;
+char *gdest;
+struct timeval start;
+
 
 uint16_t compute_checksum (uint16_t *data, size_t size)
 {
@@ -106,6 +112,9 @@ void send_request (int sockfd, struct sockaddr_in addr, unsigned int seq)
     request.checksum = compute_checksum((uint16_t *)&request, sizeof(request));
 
     int ret = sendto(sockfd, &request, 64, 0, (struct sockaddr *)&addr, sizeof(addr));
+
+    if (ret > 0)
+        transmitted++;
 }
 
 
@@ -140,6 +149,8 @@ void watch_reply (int sockfd, struct timeval timesplit)
         unsigned int time = timediff(timesplit, getnow());
 
         printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%d.%d ms\n", ret - IPH_LEN, buf, byteswapped(*seq), *ttl, time / 1000, time % 100);
+        
+        received++;
     }
 }
 
@@ -174,6 +185,15 @@ struct sockaddr_in * check_addr (char *ip, void *addr)
     freeaddrinfo(result);
 }
 
+void interrupt (int sig)
+{
+    printf("\n");
+    printf("--- %s ping statistics ---\n", gdest);
+    printf("%u packets transmitted, %u received, %u%% packet loss, time %ums\n", transmitted, received, 100 - (100 * received / transmitted), timediff(start, getnow()) / 1000);
+    printf("RTT STUFF\n");
+    exit(0);
+}
+
 
 
 int main (int ac, char **av)
@@ -199,6 +219,10 @@ int main (int ac, char **av)
         printf("  -v                 verbose output\n");
     }
     else if (dest) {
+        start = getnow();
+        gdest = av[dest];
+        signal(SIGINT, interrupt);
+
         struct sockaddr_in addr = {0};
         check_addr(av[dest], &addr);
     
