@@ -8,17 +8,75 @@ struct info ginfo = {0};
 void interrupt (int sig)
 {
     (void)sig;
-    unsigned int avg = ginfo.sum / ginfo.received;
-    unsigned int mdev = sqrt((ginfo.sqsum / ginfo.received) - (avg * avg));
 
     printf("\n");
     printf("--- %s ping statistics ---\n", ginfo.dest);
     printf("%u packets transmitted, %u received, %u%% packet loss, time %ums\n",
         ginfo.transmitted, ginfo.received, 100 - (100 * ginfo.received / ginfo.transmitted), timediff(ginfo.start, getnow()) / 1000);
-    printf("rtt min/avg/max/mdev = %u.%u/%u.%u/%u.%u/%u.%u ms\n",
-        ginfo.min / 1000, ginfo.min % 1000, avg / 1000, avg % 1000,
-        ginfo.max / 1000, ginfo.max % 1000, mdev / 1000, mdev % 1000);
+
+    if (ginfo.received) {
+        unsigned int avg = ginfo.sum / ginfo.received;
+        unsigned int mdev = sqrt((ginfo.sqsum / ginfo.received) - (avg * avg));
+
+        printf("rtt min/avg/max/mdev = %u.%u/%u.%u/%u.%u/%u.%u ms\n",
+            ginfo.min / 1000, ginfo.min % 1000, avg / 1000, avg % 1000,
+            ginfo.max / 1000, ginfo.max % 1000, mdev / 1000, mdev % 1000);
+    }
+    else {
+        printf("\n");
+    }
+
     exit(0);
+}
+
+// Read echo reply
+void recv_reply (int sockfd, struct timeval timesplit)
+{
+    int sent = 1;
+
+    while (sent > 0) {
+        // Init msghdr
+        char buf[1000] = {0};
+        char control[1000] = {0};
+
+        struct sockaddr_in sin = {0};
+
+        struct iovec iov[1];
+        iov[0].iov_base = buf;
+        iov[0].iov_len = 1000;
+
+        struct msghdr mhdr;
+        mhdr.msg_iov = iov;
+        mhdr.msg_iovlen = 1;
+        mhdr.msg_name = &sin;
+        mhdr.msg_namelen = sizeof(sin);
+        mhdr.msg_control = &control;
+        mhdr.msg_controllen = sizeof(control);
+
+
+        // Read packet
+        sent = recvmsg(sockfd, &mhdr, MSG_DONTWAIT);
+
+        struct ppacket reply;
+        memcopy(&reply, iov[0].iov_base + IPH_LEN, sizeof(struct ppacket));
+
+        if (sent == IPH_LEN + ICMPH_LEN + DATA_LEN && reply.type == 0) {
+            char ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &sin.sin_addr, ip, sizeof(ip));
+
+            uint8_t *ttl = iov[0].iov_base + 8;
+            unsigned int triptime = timediff(timesplit, getnow());
+
+
+            printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%d.%d ms\n", sent - IPH_LEN, ip, byteswapped(reply.sequence_number), *ttl, triptime / 1000, triptime % 100);
+
+            ginfo.received++;
+            ginfo.min = min(ginfo.min, triptime);
+            ginfo.max = max(ginfo.max, triptime);
+            ginfo.sum += triptime;
+            ginfo.sqsum += triptime * triptime;
+        }
+    }
 }
 
 // Send echo request
@@ -43,51 +101,8 @@ void send_request (int sockfd, struct sockaddr_in addr, unsigned int seq)
         ginfo.transmitted++;
 }
 
-// Read echo reply
-void recv_reply (int sockfd, struct timeval timesplit)
-{
-    // Init msghdr
-    char buf[1000] = {0};
-    char control[1000] = {0};
-
-    struct sockaddr_in sin = {0};
-
-    struct iovec iov[1];
-    iov[0].iov_base = buf;
-    iov[0].iov_len = 1000;
-
-    struct msghdr mhdr;
-    mhdr.msg_iov = iov;
-    mhdr.msg_iovlen = 1;
-    mhdr.msg_name = &sin;
-    mhdr.msg_namelen = sizeof(sin);
-    mhdr.msg_control = &control;
-    mhdr.msg_controllen = sizeof(control);
-
-
-    // Read packet
-    int ret = recvmsg(sockfd, &mhdr, 0);
-
-    if (ret > 0) {
-        char buf[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &sin.sin_addr, buf, sizeof(buf));
-
-        uint16_t *seq = iov[0].iov_base + IPH_LEN + 6;
-        uint8_t *ttl = iov[0].iov_base + 8;
-        unsigned int triptime = timediff(timesplit, getnow());
-
-        printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%d.%d ms\n", ret - IPH_LEN, buf, byteswapped(*seq), *ttl, triptime / 1000, triptime % 100);
-        
-        ginfo.received++;
-        ginfo.min = min(ginfo.min, triptime);
-        ginfo.max = max(ginfo.max, triptime);
-        ginfo.sum += triptime;
-        ginfo.sqsum += triptime * triptime;
-    }
-}
-
 // Get address from ip
-void check_addr (char *ip, void *addr)
+void get_addr (char *ip, void *addr)
 {
     struct addrinfo *result;
 
@@ -110,7 +125,7 @@ void check_addr (char *ip, void *addr)
 void ping (char *dest)
 {
     struct sockaddr_in addr = {0};
-    check_addr(dest, &addr);
+    get_addr(dest, &addr);
 
     char buf[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf));
@@ -125,7 +140,7 @@ void ping (char *dest)
     printf("PING %s (%s) %d(%d) bytes of data.\n", dest, buf, DATA_LEN, IPH_LEN + ICMPH_LEN + DATA_LEN);
 
     struct timeval timesplit = getnow();
-    for (int i = 0 ; i < 256 ; i++) {
+    for (int i = 0 ; i < UINT16_MAX ; i++) {
         send_request(sockfd, addr, i+1);
         recv_reply(sockfd, timesplit);
         timesplit = waitsec(timesplit);
