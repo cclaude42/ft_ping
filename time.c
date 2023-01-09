@@ -18,12 +18,11 @@ unsigned int timediff (struct timeval old, struct timeval new)
 }
 
 // Wait til timestamp + 1 second
-struct timeval waitsec (struct timeval timestamp)
+int waitsec (struct timeval timestamp)
 {
-    while (timediff(timestamp, getnow()) < 1000000)
-        ;
-
-    return getnow();
+    if (timediff(timestamp, getnow()) < 1000000)
+        return 1;
+    return 0;
 }
 
 // Write timestamp to memory (packet)

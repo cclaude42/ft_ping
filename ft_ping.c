@@ -142,8 +142,9 @@ void ping (char *dest)
     struct timeval timesplit = getnow();
     for (int i = 0 ; i < UINT16_MAX ; i++) {
         send_request(sockfd, addr, i+1);
-        recv_reply(sockfd, timesplit);
-        timesplit = waitsec(timesplit);
+        while (waitsec(timesplit))
+            recv_reply(sockfd, timesplit);
+        timesplit = getnow();
     }
 }
 

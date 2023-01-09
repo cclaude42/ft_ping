@@ -70,7 +70,7 @@ struct ppacket {
 // Time
 struct timeval getnow (void);
 unsigned int timediff (struct timeval old, struct timeval new);
-struct timeval waitsec (struct timeval timestamp);
+int waitsec (struct timeval timestamp);
 void settime (void *time);
 
 // Utils
