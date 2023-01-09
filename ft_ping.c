@@ -30,7 +30,7 @@ void interrupt (int sig)
 }
 
 // Read echo reply
-void recv_reply (int sockfd, struct timeval timesplit)
+void recv_reply (int sockfd, struct timeval timesplit, uint16_t seq)
 {
     int sent = 1;
 
@@ -60,7 +60,7 @@ void recv_reply (int sockfd, struct timeval timesplit)
         struct ppacket reply;
         memcopy(&reply, iov[0].iov_base + IPH_LEN, sizeof(struct ppacket));
 
-        if (sent == IPH_LEN + ICMPH_LEN + DATA_LEN && reply.type == 0) {
+        if (sent == IPH_LEN + ICMPH_LEN + DATA_LEN && reply.type == 0 && reply.sequence_number == byteswapped(seq)) {
             char ip[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &sin.sin_addr, ip, sizeof(ip));
 
@@ -80,7 +80,7 @@ void recv_reply (int sockfd, struct timeval timesplit)
 }
 
 // Send echo request
-void send_request (int sockfd, struct sockaddr_in addr, unsigned int seq)
+void send_request (int sockfd, struct sockaddr_in addr, uint16_t seq)
 {
     // Init packet
     struct ppacket request = {0};
@@ -140,10 +140,10 @@ void ping (char *dest)
     printf("PING %s (%s) %d(%d) bytes of data.\n", dest, buf, DATA_LEN, IPH_LEN + ICMPH_LEN + DATA_LEN);
 
     struct timeval timesplit = getnow();
-    for (int i = 0 ; i < UINT16_MAX ; i++) {
+    for (uint16_t i = 0 ; i < UINT16_MAX ; i++) {
         send_request(sockfd, addr, i+1);
         while (waitsec(timesplit))
-            recv_reply(sockfd, timesplit);
+            recv_reply(sockfd, timesplit, i+1);
         timesplit = getnow();
     }
 }
