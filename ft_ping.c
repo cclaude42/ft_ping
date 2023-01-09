@@ -107,7 +107,7 @@ void get_addr (char *ip, void *addr)
     struct addrinfo *result;
 
     if (getaddrinfo(ip, NULL, NULL, &result)) {
-        printf("ft_ping: %s: Name or service not known\n", ip);
+        fprintf(stderr, "ft_ping: %s: Name or service not known\n", ip);
         exit(2);
     }
     
@@ -132,7 +132,7 @@ void ping (char *dest)
 
     int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (sockfd < 0) {
-        printf("ft_ping: fatal error: Couldn't open socket\n");
+        fprintf(stderr, "ft_ping: fatal error: Couldn't open socket\n");
         exit(2);
     }
 
@@ -162,14 +162,14 @@ int main (int ac, char **av)
     }
 
     if (flags & FLAG_H) {
-        printf("\n");
-        printf("Usage\n");
-        printf("  ft_ping [options] <destination>\n");
-        printf("\n");
-        printf("Options:\n");
-        printf("  <destination>      dns name or ip address\n");
-        printf("  -h                 print help and exit\n");
-        printf("  -v                 verbose output\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "Usage\n");
+        fprintf(stderr, "  ft_ping [options] <destination>\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "Options:\n");
+        fprintf(stderr, "  <destination>      dns name or ip address\n");
+        fprintf(stderr, "  -h                 print help and exit\n");
+        fprintf(stderr, "  -v                 verbose output\n");
         exit(0);
     }
     else if (dest) {
@@ -181,7 +181,7 @@ int main (int ac, char **av)
         ping(av[dest]);
     }
     else {
-        printf("ft_ping: usage error: Destination address required\n");
+        fprintf(stderr, "ft_ping: usage error: Destination address required\n");
         exit(1);
     }
 
